@@ -30,7 +30,6 @@ def get_token():
     token = json_result["access_token"]
     return token
 
-token = get_token()
 
 # Generate token
 token = get_token()
