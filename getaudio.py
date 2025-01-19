@@ -1,15 +1,18 @@
+import csv
 from dotenv import load_dotenv
 import os
 import base64
 from requests import post, get
 import json
 
+# Load environment variables
 load_dotenv()
 
+# Spotify credentials
 client_id = os.getenv("CLIENT_ID")
 client_secret = os.getenv("CLIENT_SECRET")
 
-# ขอ token จาก Spotify
+# Function to get a token from Spotify
 def get_token():
     auth_str = client_id + ":" + client_secret
     auth_bytes = auth_str.encode('utf-8')
@@ -29,74 +32,107 @@ def get_token():
 
 token = get_token()
 
-# สร้าง header สำหรับการยืนยันตัวตน
+# Generate token
+token = get_token()
+
+# Function to generate authorization header
 def get_auth_header(token):
     return {"Authorization": "Bearer " + token}
 
-
-
-
-########################################################################################################################################################################################################################################
-# ค้นหาศิลปินจากชื่อ 
-def search_for_artist(token, artist_name, offset=0, limit=50):
-    url = "https://api.spotify.com/v1/search"
+# Function to search for a track by URI or name
+def search_for_track_by_uri(token, track_uri, limit=1):
+    url = f"https://api.spotify.com/v1/tracks/{track_uri.split(':')[-1]}"
     headers = get_auth_header(token)
-    query = f"?q={artist_name}&type=artist&limit={limit}&offset={offset}"
 
-    query_url = url + query
-    result = get(query_url, headers=headers)
-    json_result = json.loads(result.content)["artists"]["items"]
+    result = get(url, headers=headers)
+    json_result = json.loads(result.content)
 
-    if len(json_result) == 0:
-        print("No artist found")
+    if "id" in json_result:
+        return json_result
+    else:
+        print(f"No track found for URI: {track_uri}")
         return None
 
-    return json_result
-
-
-# ขอได้ครั้งละ 50 ศิลปิน โดยเริ่มจากตำแหน่งที่ 0
-# แค่มี a ในชื่อ ก็จะได้ศิลปินที่มี a ในชื่อ
-artists1 = search_for_artist(token, "a")
-artists51 = search_for_artist(token, "a", offset=50)
-
-artist_rank = []
-# 0-49
-if artists1:
-    for idx, artist in enumerate(artists1):
-        # ตรวจสอบความนิยมของศิลปิน 0 คือน้อยที่สุด 100 คือมากที่สุด
-        if artist.get("popularity") >= 50:
-            print(f"{idx + 1}: {artist['name']} {artist['popularity']}")
-else:
-    print("No artists found.")
-
-# 50-99
-if artists51:
-    for idx, artist in enumerate(artists51, start=51):
-        if artist.get("popularity") >= 50:
-            print(f"{idx}: {artist['name']} {artist['popularity']}")
-else:
-    print("No artists found.")
-########################################################################################################################################################################################################################################
-
-
-
-
-########################################################################################################################################################################################################################################
-# artist_id = result["id"]
-# ดึงเพลงของศิลปิน โดยใช้ artist_id
-def get_song_by_artist(token, artist_id):
-    url = f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
+# Function to get audio features for a track
+def get_audio_features(token, track_id):
+    url = f"https://api.spotify.com/v1/audio-features/{track_id}"
     headers = get_auth_header(token)
-    
+
     result = get(url, headers=headers)
-    json_result = json.loads(result.content)["tracks"]
+    
+    # Debugging output to check response status and content
+    print(f"Response Status: {result.status_code}")
+    print(f"Response Content: {result.content}")
 
-    return json_result
+    if result.status_code == 200:
+        json_result = json.loads(result.content)
+        return json_result
+    elif result.status_code == 403:
+        print("Forbidden: Access to the audio features is restricted.")
+    else:
+        print(f"Failed to retrieve audio features. Status Code: {result.status_code}")
+    
+    return None
 
+# Function to process tracks from the CSV file
+def process_csv(input_file, output_file):
+    with open(input_file, "r") as csv_file:
+        reader = csv.DictReader(csv_file)
+        results = []
 
-# song = get_song_by_artist(token, artist_id)
-# for song in song:
-#     print(song["name"])
-########################################################################################################################################################################################################################################
+        for row in reader:
+            print(row)
+            track_uri = row["uri"]  # URI from the CSV
+            track_name = row["track_name"]
+            artist_names = row["artist_names"]
+            print(f"Processing: {track_name} by {artist_names}")
 
+            # Search for the track using the URI
+            track = search_for_track_by_uri(token, track_uri)
 
+            if track:
+                track_id = track["id"]
+                track_artist = ", ".join(artist["name"] for artist in track["artists"])
+
+                # Get audio features for the track
+                audio_features = get_audio_features(token, track_id)
+                print(audio_features)
+
+                if audio_features:
+                    # Append the track and audio features to results
+                    results.append(
+                        {
+                            "Rank": row["\ufeffrank"],
+                            "Track URI": track_uri,
+                            "Artist Names": artist_names,
+                            "Track Name": track_name,
+                            "Source": row["source"],
+                            "Peak Rank": row["peak_rank"],
+                            "Previous Rank": row["previous_rank"],
+                            "Weeks on Chart": row["weeks_on_chart"],
+                            "Streams": row["streams"],
+                            "Tempo (BPM)": audio_features["tempo"],
+                            "Danceability": audio_features["danceability"],
+                            "Energy": audio_features["energy"],
+                            "Loudness": audio_features["loudness"],
+                            "Key": audio_features["key"],
+                        }
+                    )
+
+        # Write results to a new CSV file
+        with open(output_file, "w", newline="") as out_file:
+            fieldnames = [
+                "Rank", "Track URI", "Artist Names", "Track Name", "Source", 
+                "Peak Rank", "Previous Rank", "Weeks on Chart", "Streams", 
+                "Tempo (BPM)", "Danceability", "Energy", "Loudness", "Key"
+            ]
+            writer = csv.DictWriter(out_file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+
+        print(f"Results saved to {output_file}.")
+
+# Example usage
+input_file = "./charts/regional-th-weekly-2019-01-03.csv"  # Replace with your input CSV file
+output_file = "output_audio_features.csv"  # Replace with your desired output CSV file
+process_csv(input_file, output_file)
